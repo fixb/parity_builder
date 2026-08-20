@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Global Focus Parity Builder</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2129;--line:#21262d;--txt:#e6edf3;
+--dim:#8b949e;--acc:#58a6ff;--grn:#3fb950;--red:#f85149;--amb:#d29922;
+--mono:'SF Mono','Cascadia Code','Consolas',ui-monospace,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--txt);font:13px/1.45 'Segoe UI',system-ui,sans-serif;padding:22px;max-width:1420px;margin:0 auto}
+h1{font-size:19px;font-weight:600}
+h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 9px}
+.sub{color:var(--dim);margin-top:3px;font-size:12px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px}
+/* drop zone */
+#drop{border:2px dashed var(--line);border-radius:10px;padding:34px;text-align:center;
+color:var(--dim);margin-top:18px;cursor:pointer;transition:border-color .15s,background .15s}
+#drop.over{border-color:var(--acc);background:var(--panel)}
+#drop b{color:var(--txt)}
+#drop .hint{font-size:11.5px;margin-top:6px}
+/* checks strip */
+.checks{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px}
+.chk{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
+border-radius:6px;padding:6px 11px;font-size:12px}
+.led{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.led.ok{background:var(--grn);box-shadow:0 0 6px rgba(63,185,80,.55)}
+.led.warn{background:var(--amb);box-shadow:0 0 6px rgba(210,153,34,.55)}
+.led.bad{background:var(--red);box-shadow:0 0 6px rgba(248,81,73,.55)}
+/* kpis */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:11px;margin-top:14px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.kpi .l{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
+.kpi .v{font-size:20px;font-weight:600;margin-top:4px;font-family:var(--mono)}
+.kpi .v.acc{color:var(--acc)} .kpi .v.amb{color:var(--amb)}
+/* tables */
+table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th{text-align:left;color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;
+padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap;cursor:pointer;user-select:none}
+th.r{text-align:right} th:hover{color:var(--txt)}
+th .arr{color:var(--acc);font-size:9px;margin-left:3px}
+td{padding:5px 10px;border-bottom:1px solid var(--line)}
+td.r{text-align:right;font-family:var(--mono);font-size:12px}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--panel2)}
+.pos{color:var(--grn)} .neg{color:var(--red)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:980px){.grid2{grid-template-columns:1fr}}
+/* toolbar */
+.bar{display:flex;gap:10px;align-items:center;margin:14px 0 10px;flex-wrap:wrap}
+button{background:#1f6feb;color:#fff;border:0;border-radius:6px;padding:8px 15px;
+font:600 12.5px 'Segoe UI',system-ui;cursor:pointer}
+button:hover{background:#388bfd}
+button.ghost{background:var(--panel);border:1px solid var(--line);color:var(--txt)}
+button.ghost:hover{border-color:var(--acc)}
+input[type=text]{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+color:var(--txt);padding:7px 11px;font-size:12.5px;width:230px}
+input[type=text]:focus{outline:0;border-color:var(--acc)}
+.note{color:var(--dim);font-size:11.5px;margin-top:7px}
+#detailWrap{max-height:560px;overflow:auto;border-radius:8px;border:1px solid var(--line)}
+#detailWrap table{border:0}
+#detailWrap thead th{position:sticky;top:0;background:var(--panel);z-index:2}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<h1>Global Focus Parity Builder</h1>
+<div class="sub">Fichier constituants FTSE Global Focus (UCBINDEX .xls / .xlsx) &rarr; recalcul bottom-up du Parity Index &middot; poids parité = MCap<sub>CB</sub> &times; parité / prix CB &middot; export workbook détaillé avec formules</div>
+
+<div id="drop">
+<b>Dépose le fichier UCBINDEX ici</b> ou clique pour sélectionner
+<div class="hint">Détection automatique de la ligne d'en-tête (ISIN + Parity) — mapping par nom de colonne, ordre indifférent</div>
+<input type="file" id="fileInput" accept=".xls,.xlsx" style="display:none">
+</div>
+
+<div id="app" class="hidden">
+<div class="checks" id="checks"></div>
+<div class="kpis" id="kpis"></div>
+<div class="note" id="sanity"></div>
+
+<h2>Buckets delta</h2>
+<div id="buckets"></div>
+
+<div class="grid2" style="margin-top:16px">
+<div><h2 style="margin-top:0">Régions</h2><div id="regions"></div></div>
+<div><h2 style="margin-top:0">Écarts extrêmes Parity vs CB (pp)</h2><div id="gaps"></div></div>
+</div>
+
+<h2>Détail des 0 lignes</h2>
+<div class="bar">
+<button id="btnXlsx">Exporter le workbook détaillé (.xlsx)</button>
+<button id="btnCsv" class="ghost">Exporter le détail (.csv)</button>
+<input type="text" id="filter" placeholder="Filtrer : issue, ISIN, région, secteur…">
+<span class="note" id="filterCount"></span>
+</div>
+<div id="detailWrap"></div>
+<div class="note">Export xlsx : feuille <b>Parity Detail</b> (formules vivantes MCap parité / poids / gap / prime recalc / check) + feuille <b>Summary</b> (agrégats et buckets en SUMPRODUCT/SUMIFS, bornes modifiables). SheetJS n'écrit pas les couleurs — pour la version avec code couleur inputs/formules, utiliser le script Python compagnon.</div>
+</div>
+
+<script>
+'use strict';
+let D = [];            // lignes calculées
+let S = {};            // stats
+let srcName = '';
+let sortKey = 'issue', sortAsc = true;
+
+const $ = id => document.getElementById(id);
+const fmt = (x,d=2) => x==null||isNaN(x) ? '–' : x.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const gapHtml = v => `<span class="${v>=0?'pos':'neg'}">${v>=0?'+':''}${fmt(v)}</span>`;
+
+/* ---------- parsing ---------- */
+const COLS = {
+  issue:'Issue', isin:'ISIN', ccy:'Bond Currency', cbPx:'Convertible Price',
+  eqPx:'Equity Price', parity:'Parity', prem:'Conversion Premium', delta:'Delta',
+  mcap:'Market Cap (USDm)', w:'Index Weight', region:'Region', sector:'Sector'
+};
+
+function parseWorkbook(wb){
+  const ws = wb.Sheets[wb.SheetNames.find(n=>/index/i.test(n)) || wb.SheetNames[0]];
+  const aoa = XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null});
+  // header = première ligne contenant ISIN ET Parity
+  let hi = aoa.findIndex(r => r && r.some(c=>String(c).trim()==='ISIN') && r.some(c=>String(c).trim()==='Parity'));
+  if(hi<0) throw new Error("En-tête introuvable : aucune ligne ne contient à la fois 'ISIN' et 'Parity'.");
+  const hdr = aoa[hi].map(c=>String(c==null?'':c).trim());
+  const ix = {};
+  for(const [k,name] of Object.entries(COLS)){
+    ix[k] = hdr.indexOf(name);
+    if(ix[k]<0 && ['issue','isin','cbPx','parity','mcap','w'].includes(k))
+      throw new Error(`Colonne obligatoire absente : "${name}"`);
+  }
+  const rows=[];
+  for(let i=hi+1;i<aoa.length;i++){
+    const r = aoa[i]; if(!r) continue;
+    const isin = r[ix.isin], parity = +r[ix.parity], cbPx = +r[ix.cbPx];
+    if(!isin || !isFinite(parity) || !isFinite(cbPx) || cbPx<=0) continue;
+    rows.push({
+      issue:String(r[ix.issue]??''), isin:String(isin),
+      ccy: ix.ccy>=0? String(r[ix.ccy]??''):'', region: ix.region>=0? String(r[ix.region]??''):'',
+      sector: ix.sector>=0? String(r[ix.sector]??''):'',
+      delta: ix.delta>=0? +r[ix.delta] : NaN,
+      cbPx, eqPx: ix.eqPx>=0? +r[ix.eqPx]:NaN, parity,
+      prem: ix.prem>=0? +r[ix.prem]:NaN,
+      mcap:+r[ix.mcap], w:+r[ix.w]
+    });
+  }
+  if(!rows.length) throw new Error('Aucune ligne de données valide sous l’en-tête.');
+  return rows;
+}
+
+/* ---------- calculs ---------- */
+function compute(rows){
+  let totCB=0, totPar=0;
+  for(const r of rows){ r.mcapPar = r.mcap*r.parity/r.cbPx; totCB+=r.mcap; totPar+=r.mcapPar; }
+  for(const r of rows){
+    r.wPar = r.mcapPar/totPar*100;
+    r.gap = r.wPar - r.w;
+    r.premCalc = (r.cbPx/r.parity-1)*100;
+    r.check = isFinite(r.prem)? r.premCalc - r.prem : NaN;
+  }
+  const wSum = rows.reduce((a,r)=>a+r.w,0);
+  const premCbw = rows.reduce((a,r)=>a+(isFinite(r.prem)?r.prem*r.w:0),0)/100;
+  const premParw = rows.reduce((a,r)=>a+(isFinite(r.prem)?r.prem*r.wPar:0),0)/100;
+  const deltaCbw = rows.reduce((a,r)=>a+(isFinite(r.delta)?r.delta*r.w:0),0)/100;
+  const maxChk = Math.max(...rows.map(r=>isFinite(r.check)?Math.abs(r.check):0));
+  return { n:rows.length, totCB, totPar, wSum,
+    aggPrem:(totCB/totPar-1)*100, premCbw, premParw, deltaCbw, maxChk };
+}
+
+const BKT = [['Busted <40',0,40],['Balanced 40–60',40,60],['Balanced 60–80',60,80],['ITM >80',80,101]];
+const bucketOf = d => { for(const [n,lo,hi] of BKT) if(d>=lo&&d<hi) return n; return '–'; };
+
+/* ---------- rendu ---------- */
+function renderChecks(){
+  const items = [
+    ['Σ poids CB = 100', Math.abs(S.wSum-100)<0.05 ? 'ok':'bad', fmt(S.wSum,2)+'%'],
+    ['Prime pond. parité = prime agrégée', Math.abs(S.premParw-S.aggPrem)<0.05 ? 'ok':'bad',
+      fmt(S.premParw)+'% vs '+fmt(S.aggPrem)+'%'],
+    ['Max |prime recalc − FTSE|', S.maxChk<1 ? 'ok': (S.maxChk<2?'warn':'bad'), fmt(S.maxChk)+'pp'],
+    ['Lignes parsées', 'ok', S.n]
+  ];
+  $('checks').innerHTML = items.map(([l,st,v])=>
+    `<div class="chk"><span class="led ${st}"></span>${l} <span class="num" style="color:var(--dim)">· ${v}</span></div>`).join('');
+}
+function renderKpis(){
+  $('kpis').innerHTML = `
+  <div class="kpi"><div class="l">MCap CB</div><div class="v">$${fmt(S.totCB/1000,1)}bn</div></div>
+  <div class="kpi"><div class="l">MCap Parité</div><div class="v">$${fmt(S.totPar/1000,1)}bn</div></div>
+  <div class="kpi"><div class="l">Prime agrégée</div><div class="v acc">${fmt(S.aggPrem)}%</div></div>
+  <div class="kpi"><div class="l">Prime pond. CB</div><div class="v">${fmt(S.premCbw)}%</div></div>
+  <div class="kpi"><div class="l">Effet dispersion</div><div class="v amb">${S.premCbw-S.aggPrem>=0?'+':''}${fmt((S.premCbw-S.aggPrem)*100,0)}bp</div></div>
+  <div class="kpi"><div class="l">Delta pond. CB</div><div class="v">${fmt(S.deltaCbw,1)}</div></div>`;
+  $('sanity').textContent = `Source : ${srcName} · ${S.n} lignes. L'écart prime pondérée CB (${fmt(S.premCbw)}%) vs agrégée (${fmt(S.aggPrem)}%) mesure la dispersion des primes du gisement.`;
+}
+function agg(rows, keyFn){
+  const m = new Map();
+  for(const r of rows){
+    const k = keyFn(r); if(!m.has(k)) m.set(k,{n:0,w:0,wPar:0,prem:0,premN:0});
+    const a = m.get(k); a.n++; a.w+=r.w; a.wPar+=r.wPar;
+    if(isFinite(r.prem)){a.prem+=r.prem;a.premN++;}
+  }
+  return m;
+}
+function renderBuckets(){
+  const m = agg(D, r=>bucketOf(r.delta));
+  const maxW = Math.max(...[...m.values()].map(a=>a.w));
+  let h = '<table><thead><tr><th>Bucket</th><th class="r">N</th><th class="r">Poids CB %</th><th class="r">Poids parité %</th><th class="r">Gap</th><th class="r">Prime moy. %</th><th style="width:32%">Poids CB</th></tr></thead><tbody>';
+  for(const [name] of BKT){
+    const a = m.get(name); if(!a) continue;
+    h += `<tr><td>${name}</td><td class="r">${a.n}</td><td class="r">${fmt(a.w)}</td><td class="r">${fmt(a.wPar)}</td><td class="r">${gapHtml(a.wPar-a.w)}</td><td class="r">${fmt(a.prem/a.premN,1)}</td>
+    <td><div style="height:9px;border-radius:4px;background:linear-gradient(90deg,var(--acc),#1f6feb);width:${a.w/maxW*100}%"></div></td></tr>`;
+  }
+  $('buckets').innerHTML = h+'</tbody></table>';
+}
+function renderRegions(){
+  const m = [...agg(D, r=>r.region||'–').entries()].sort((a,b)=>b[1].w-a[1].w);
+  $('regions').innerHTML = '<table><thead><tr><th>Région</th><th class="r">N</th><th class="r">Poids CB %</th><th class="r">Poids parité %</th><th class="r">Gap</th></tr></thead><tbody>'+
+    m.map(([k,a])=>`<tr><td>${k}</td><td class="r">${a.n}</td><td class="r">${fmt(a.w)}</td><td class="r">${fmt(a.wPar)}</td><td class="r">${gapHtml(a.wPar-a.w)}</td></tr>`).join('')+'</tbody></table>';
+}
+function renderGaps(){
+  const s=[...D].sort((a,b)=>b.gap-a.gap);
+  const pick=[...s.slice(0,5),...s.slice(-5)];
+  $('gaps').innerHTML = '<table><thead><tr><th>Issue</th><th class="r">Delta</th><th class="r">Prime %</th><th class="r">Gap pp</th></tr></thead><tbody>'+
+    pick.map(r=>`<tr><td>${r.issue}</td><td class="r">${fmt(r.delta,1)}</td><td class="r">${fmt(r.prem,1)}</td><td class="r">${gapHtml(r.gap)}</td></tr>`).join('')+'</tbody></table>';
+}
+const DET = [
+  ['issue','Issue',0],['isin','ISIN',0],['ccy','Ccy',0],['region','Région',0],['sector','Secteur',0],
+  ['delta','Delta',1],['cbPx','Px CB',1],['parity','Parité',1],['prem','Prime FTSE',1],
+  ['mcap','MCap CB',1],['w','W CB %',1],['mcapPar','MCap Par.',1],['wPar','W Par %',1],
+  ['gap','Gap pp',1],['check','Check pp',1]
+];
+function renderDetail(){
+  const q = $('filter').value.trim().toLowerCase();
+  let rows = q? D.filter(r=>[r.issue,r.isin,r.region,r.sector,r.ccy].some(s=>s.toLowerCase().includes(q))) : [...D];
+  rows.sort((a,b)=>{
+    const x=a[sortKey],y=b[sortKey];
+    const c = (typeof x==='string')? x.localeCompare(y) : (x-y);
+    return sortAsc? c : -c;
+  });
+  const head = DET.map(([k,l,num])=>
+    `<th class="${num?'r':''}" data-k="${k}">${l}${k===sortKey?`<span class="arr">${sortAsc?'▲':'▼'}</span>`:''}</th>`).join('');
+  const body = rows.map(r=>DET.map(([k,,num])=>{
+    if(k==='gap') return `<td class="r">${gapHtml(r[k])}</td>`;
+    if(k==='mcap'||k==='mcapPar') return `<td class="r">${fmt(r[k],0)}</td>`;
+    if(num) return `<td class="r">${fmt(r[k])}</td>`;
+    return `<td>${r[k]}</td>`;
+  }).join('')).join('</tr><tr>');
+  $('detailWrap').innerHTML = `<table><thead><tr>${head}</tr></thead><tbody><tr>${body}</tr></tbody></table>`;
+  $('filterCount').textContent = q? `${rows.length}/${D.length} lignes` : `${D.length} lignes`;
+  document.querySelectorAll('#detailWrap th').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; if(k===sortKey) sortAsc=!sortAsc; else {sortKey=k;sortAsc=true;} renderDetail();
+  });
+}
+function renderAll(){
+  $('app').classList.remove('hidden');
+  document.querySelector('h2:nth-of-type(3)');
+  renderChecks(); renderKpis(); renderBuckets(); renderRegions(); renderGaps();
+  document.querySelectorAll('h2').forEach(h=>{ if(h.textContent.startsWith('Détail')) h.textContent=`Détail des ${D.length} lignes`; });
+  renderDetail();
+}
+
+/* ---------- exports ---------- */
+function exportXlsx(){
+  const wb = XLSX.utils.book_new();
+  const n = D.length, first=2, last=n+1, tr=last+1;
+  const hdr = ['Issue','ISIN','Ccy','Region','Sector','Delta','CB Price','Equity Price',
+    'Parity (FTSE)','Premium (FTSE) %','MCap CB (USDm)','Index Weight %',
+    'MCap Parity (USDm)','Parity Weight %','Weight Gap (pp)','Premium recalc %','Check (pp)'];
+  const aoa = [hdr];
+  const rows = [...D].sort((a,b)=>a.issue.localeCompare(b.issue));
+  rows.forEach((r,i)=>{
+    const R=first+i;
+    aoa.push([r.issue,r.isin,r.ccy,r.region,r.sector,r.delta,r.cbPx,r.eqPx,r.parity,r.prem,r.mcap,r.w,
+      {t:'n',f:`K${R}*I${R}/G${R}`,v:r.mcapPar},
+      {t:'n',f:`M${R}/$M$${tr}*100`,v:r.wPar},
+      {t:'n',f:`N${R}-L${R}`,v:r.gap},
+      {t:'n',f:`(G${R}/I${R}-1)*100`,v:r.premCalc},
+      {t:'n',f:`P${R}-J${R}`,v:r.check}]);
+  });
+  aoa.push(['TOTAL','','','','','','','','','',
+    {t:'n',f:`SUM(K${first}:K${last})`,v:S.totCB},
+    {t:'n',f:`SUM(L${first}:L${last})`,v:S.wSum},
+    {t:'n',f:`SUM(M${first}:M${last})`,v:S.totPar},
+    {t:'n',f:`SUM(N${first}:N${last})`,v:100},'','','']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [26,15,6,13,13,7,9,11,9,10,11,9,11,9,9,10,8].map(w=>({wch:w}));
+  ws['!freeze'] = {xSplit:0,ySplit:1};
+  XLSX.utils.book_append_sheet(wb, ws, 'Parity Detail');
+
+  const Dq = "'Parity Detail'!";
+  const sm = [
+    ['FTSE Global Focus Parity — recalcul bottom-up'],
+    [`Source : ${srcName}, ${n} lignes. MCap Parity = MCap CB × Parité / Prix CB.`],
+    [],
+    ['Nombre de lignes',{t:'n',f:`COUNTA(${Dq}A${first}:A${last})`,v:n}],
+    ['MCap CB totale (USDm)',{t:'n',f:`${Dq}K${tr}`,v:S.totCB}],
+    ['MCap Parité totale (USDm)',{t:'n',f:`${Dq}M${tr}`,v:S.totPar}],
+    ['Prime agrégée % (ratio des caps)',{t:'n',f:`(${Dq}K${tr}/${Dq}M${tr}-1)*100`,v:S.aggPrem}],
+    ['Prime pondérée CB %',{t:'n',f:`SUMPRODUCT(${Dq}J${first}:J${last},${Dq}L${first}:L${last})/100`,v:S.premCbw}],
+    ['Prime pondérée Parité % (= agrégée, sanity check)',{t:'n',f:`SUMPRODUCT(${Dq}J${first}:J${last},${Dq}N${first}:N${last})/100`,v:S.premParw}],
+    ['Effet dispersion (bp)',{t:'n',f:'(B8-B7)*100',v:(S.premCbw-S.aggPrem)*100}],
+    ['Delta pondéré CB',{t:'n',f:`SUMPRODUCT(${Dq}F${first}:F${last},${Dq}L${first}:L${last})/100`,v:S.deltaCbw}],
+    [],
+    ['Buckets delta'],
+    ['Bucket','Borne inf','Borne sup','N','Poids CB %','Poids Parité %','Gap pp','Prime moy %']
+  ];
+  const b0 = sm.length+1;
+  BKT.forEach(([name,lo,hi],i)=>{
+    const R=b0+i;
+    const crit=`${Dq}F${first}:F${last},">="&B${R},${Dq}F${first}:F${last},"<"&C${R}`;
+    sm.push([name,lo,hi,
+      {t:'n',f:`COUNTIFS(${crit})`},
+      {t:'n',f:`SUMIFS(${Dq}L${first}:L${last},${crit})`},
+      {t:'n',f:`SUMIFS(${Dq}N${first}:N${last},${crit})`},
+      {t:'n',f:`F${R}-E${R}`},
+      {t:'n',f:`SUMIFS(${Dq}J${first}:J${last},${crit})/D${R}`}]);
+  });
+  const ws2 = XLSX.utils.aoa_to_sheet(sm);
+  ws2['!cols'] = [{wch:48},{wch:12},{wch:12},{wch:8},{wch:12},{wch:14},{wch:10},{wch:12}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Summary');
+  XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+'_parity_detail.xlsx');
+}
+function exportCsv(){
+  const hdr=['Issue','ISIN','Ccy','Region','Sector','Delta','CB Price','Parity','Premium FTSE','MCap CB USDm','Index Weight','MCap Parity USDm','Parity Weight','Weight Gap','Premium recalc','Check'];
+  const lines=[hdr.join(',')];
+  for(const r of [...D].sort((a,b)=>a.issue.localeCompare(b.issue)))
+    lines.push([`"${r.issue.replace(/"/g,'""')}"`,r.isin,r.ccy,r.region,r.sector,r.delta,r.cbPx,r.parity,r.prem,r.mcap,r.w,
+      r.mcapPar.toFixed(4),r.wPar.toFixed(5),r.gap.toFixed(5),r.premCalc.toFixed(3),(isFinite(r.check)?r.check.toFixed(3):'')].join(','));
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));
+  a.download=srcName.replace(/\.[^.]+$/,'')+'_parity_detail.csv'; a.click();
+}
+
+/* ---------- fichier ---------- */
+function handleFile(file){
+  srcName = file.name;
+  const rd = new FileReader();
+  rd.onload = e=>{
+    try{
+      const wb = XLSX.read(new Uint8Array(e.target.result),{type:'array'});
+      D = parseWorkbook(wb); S = compute(D);
+      $('drop').innerHTML = `<b>${srcName}</b> — ${S.n} lignes chargées · déposer un autre fichier pour recharger`;
+      renderAll();
+    }catch(err){
+      $('drop').innerHTML = `<b style="color:var(--red)">Erreur :</b> ${err.message}<div class="hint">Vérifier que le fichier est un export UCBINDEX (feuille "Index", en-tête avec ISIN et Parity).</div>`;
+    }
+  };
+  rd.readAsArrayBuffer(file);
+}
+const drop=$('drop'), fi=$('fileInput');
+drop.onclick=()=>fi.click();
+fi.onchange=e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); };
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
+drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+$('filter').addEventListener('input',renderDetail);
+$('btnXlsx').onclick=exportXlsx;
+$('btnCsv').onclick=exportCsv;
+</script>
+</body>
+</html>
