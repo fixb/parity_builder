@@ -106,6 +106,7 @@ button.tab.active{color:var(--txt);border-bottom-color:var(--acc)}
 <div class="bar">
 <button id="btnXlsx">Exporter le workbook détaillé (.xlsx)</button>
 <button id="btnCsv" class="ghost">Exporter le détail (.csv)</button>
+<button id="btnDetailView" class="ghost">Exporter ce tableau (.xlsx)</button>
 <input type="text" id="filter" placeholder="Filtrer : issue, ISIN, région, secteur…">
 <span class="note" id="filterCount"></span>
 </div>
@@ -114,6 +115,7 @@ button.tab.active{color:var(--txt);border-bottom-color:var(--acc)}
 </div>
 <div id="pane-issuers" class="hidden">
 <div class="bar">
+<button id="btnIssuerView" class="ghost">Exporter ce tableau (.xlsx)</button>
 <input type="text" id="iFilter" placeholder="Filtrer : émetteur, région, secteur…">
 <span class="note" id="iFilterCount"></span>
 </div>
@@ -282,14 +284,19 @@ const DET = [
   ['mcap','MCap CB',1],['w','W CB %',1],['mcapPar','MCap Par.',1],['wPar','W Par %',1],
   ['gap','Gap pp',1],['check','Check pp',1]
 ];
-function renderDetail(){
+// lignes du détail telles qu'affichées (filtre + tri courants)
+function detailView(){
   const q = $('filter').value.trim().toLowerCase();
-  let rows = q? D.filter(r=>[r.issue,r.issuer,r.isin,r.region,r.sector,r.ccy].some(s=>s.toLowerCase().includes(q))) : [...D];
-  rows.sort((a,b)=>{
+  const rows = q? D.filter(r=>[r.issue,r.issuer,r.isin,r.region,r.sector,r.ccy].some(s=>s.toLowerCase().includes(q))) : [...D];
+  return rows.sort((a,b)=>{
     const x=a[sortKey],y=b[sortKey];
     const c = (typeof x==='string')? x.localeCompare(y) : (x-y);
     return sortAsc? c : -c;
   });
+}
+function renderDetail(){
+  const q = $('filter').value.trim();
+  const rows = detailView();
   const head = DET.map(([k,l,num])=>
     `<th class="${num?'r':''}" data-k="${k}">${l}${k===sortKey?`<span class="arr">${sortAsc?'▲':'▼'}</span>`:''}</th>`).join('');
   const body = rows.map(r=>DET.map(([k,,num])=>{
@@ -309,14 +316,18 @@ const IDET = [
   ['delta','Delta pond.',1],['prem','Prime pond. %',1],['premAgg','Prime agr. %',1],
   ['mcap','MCap CB',1],['w','W CB %',1],['mcapPar','MCap Par.',1],['wPar','W Par %',1],['gap','Gap pp',1]
 ];
-function renderIssuers(){
+function issuerView(){
   const q = $('iFilter').value.trim().toLowerCase();
-  let rows = q? I.filter(a=>[a.issuer,a.region,a.sector].some(s=>s.toLowerCase().includes(q))) : [...I];
-  rows.sort((a,b)=>{
+  const rows = q? I.filter(a=>[a.issuer,a.region,a.sector].some(s=>s.toLowerCase().includes(q))) : [...I];
+  return rows.sort((a,b)=>{
     const x=a[iSortKey],y=b[iSortKey];
     const c = (typeof x==='string')? x.localeCompare(y) : ((isFinite(x)?x:-Infinity)-(isFinite(y)?y:-Infinity));
     return iSortAsc? c : -c;
   });
+}
+function renderIssuers(){
+  const q = $('iFilter').value.trim();
+  const rows = issuerView();
   const head = IDET.map(([k,l,num])=>
     `<th class="${num?'r':''}" data-k="${k}">${l}${k===iSortKey?`<span class="arr">${iSortAsc?'▲':'▼'}</span>`:''}</th>`).join('');
   const body = rows.map(a=>`<tr data-issuer="${a.issuer.replace(/"/g,'&quot;')}">`+IDET.map(([k,,num])=>{
@@ -435,6 +446,18 @@ function exportXlsx(){
   XLSX.utils.book_append_sheet(wb, ws3, 'Issuers');
   XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+'_parity_detail.xlsx');
 }
+// export xlsx (valeurs) du tableau affiché : mêmes colonnes, filtre et tri que l'écran
+function exportView(cols, rows, sheet, suffix){
+  const aoa = [cols.map(([,l])=>l), ...rows.map(r=>cols.map(([k])=>{
+    const v = r[k]; return (typeof v==='number' && !isFinite(v)) ? null : v;
+  }))];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = cols.map(([k,l])=>({wch: Math.max(l.length+2, k==='issue'||k==='issuer'?26:k==='isin'?15:10)}));
+  ws['!autofilter'] = {ref: XLSX.utils.encode_range({s:{r:0,c:0},e:{r:rows.length,c:cols.length-1}})};
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheet);
+  XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+suffix+'.xlsx');
+}
 function exportCsv(){
   const hdr=['Issue','ISIN','Ccy','Region','Sector','Delta','CB Price','Parity','Premium FTSE','MCap CB USDm','Index Weight','MCap Parity USDm','Parity Weight','Weight Gap','Premium recalc','Check'];
   const lines=[hdr.join(',')];
@@ -473,6 +496,8 @@ $('iFilter').addEventListener('input',renderIssuers);
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 $('btnXlsx').onclick=exportXlsx;
 $('btnCsv').onclick=exportCsv;
+$('btnDetailView').onclick=()=>exportView([['issuer','Émetteur',0],...DET], detailView(), 'Détail', '_detail');
+$('btnIssuerView').onclick=()=>exportView(IDET, issuerView(), 'Émetteurs', '_emetteurs');
 </script>
 </body>
 </html>
