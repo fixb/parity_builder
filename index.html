@@ -63,6 +63,16 @@ input[type=text]:focus{outline:0;border-color:var(--acc)}
 #detailWrap table{border:0}
 #detailWrap thead th{position:sticky;top:0;background:var(--panel);z-index:2}
 .hidden{display:none}
+/* onglets */
+.tabs{display:flex;gap:2px;margin:24px 0 0;border-bottom:1px solid var(--line)}
+button.tab{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--dim);
+padding:8px 14px;font:600 12px 'Segoe UI',system-ui;text-transform:uppercase;letter-spacing:.06em;margin-bottom:-1px}
+button.tab:hover{background:none;color:var(--txt)}
+button.tab.active{color:var(--txt);border-bottom-color:var(--acc)}
+#issuerWrap{max-height:560px;overflow:auto;border-radius:8px;border:1px solid var(--line)}
+#issuerWrap table{border:0}
+#issuerWrap thead th{position:sticky;top:0;background:var(--panel);z-index:2}
+#issuerWrap tbody tr{cursor:pointer}
 </style>
 </head>
 <body>
@@ -88,7 +98,11 @@ input[type=text]:focus{outline:0;border-color:var(--acc)}
 <div><h2 style="margin-top:0">Écarts extrêmes Parity vs CB (pp)</h2><div id="gaps"></div></div>
 </div>
 
-<h2>Détail des 0 lignes</h2>
+<div class="tabs">
+<button class="tab active" data-tab="detail" id="tabDetail">Détail</button>
+<button class="tab" data-tab="issuers" id="tabIssuers">Émetteurs</button>
+</div>
+<div id="pane-detail">
 <div class="bar">
 <button id="btnXlsx">Exporter le workbook détaillé (.xlsx)</button>
 <button id="btnCsv" class="ghost">Exporter le détail (.csv)</button>
@@ -98,6 +112,15 @@ input[type=text]:focus{outline:0;border-color:var(--acc)}
 <div id="detailWrap"></div>
 <div class="note">Export xlsx : feuille <b>Parity Detail</b> (formules vivantes MCap parité / poids / gap / prime recalc / check) + feuille <b>Summary</b> (agrégats et buckets en SUMPRODUCT/SUMIFS, bornes modifiables). SheetJS n'écrit pas les couleurs — pour la version avec code couleur inputs/formules, utiliser le script Python compagnon.</div>
 </div>
+<div id="pane-issuers" class="hidden">
+<div class="bar">
+<input type="text" id="iFilter" placeholder="Filtrer : émetteur, région, secteur…">
+<span class="note" id="iFilterCount"></span>
+</div>
+<div id="issuerWrap"></div>
+<div class="note">Regroupement sur la colonne <i>Issue</i> (nom de l'émetteur côté FTSE), avec fusion des libellés alias listés dans <code>ISSUER_ALIAS</code>. Prime agrégée = MCap CB / MCap parité − 1 ; prime et delta pondérés par le poids CB. Clic sur une ligne → détail filtré sur l'émetteur. Feuille <b>Issuers</b> dans l'export xlsx (SUMIFS sur la colonne Issuer du détail).</div>
+</div>
+</div>
 
 <script>
 'use strict';
@@ -105,6 +128,8 @@ let D = [];            // lignes calculées
 let S = {};            // stats
 let srcName = '';
 let sortKey = 'issue', sortAsc = true;
+let I = [];            // agrégats par émetteur
+let iSortKey = 'w', iSortAsc = false;
 
 const $ = id => document.getElementById(id);
 const fmt = (x,d=2) => x==null||isNaN(x) ? '–' : x.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
@@ -115,6 +140,14 @@ const COLS = {
   issue:'Issue', isin:'ISIN', ccy:'Bond Currency', cbPx:'Convertible Price',
   eqPx:'Equity Price', parity:'Parity', prem:'Conversion Premium', delta:'Delta',
   mcap:'Market Cap (USDm)', w:'Index Weight', region:'Region', sector:'Sector'
+};
+// libellés Issue FTSE désignant le même émetteur → nom retenu dans la vue Émetteurs
+const ISSUER_ALIAS = {
+  'Akamai Tech':'Akamai Technologies',
+  'Live Nation Ent':'Live Nation',
+  'PPL Corporation':'PPL',
+  'Alibaba H(Alibaba)':'Alibaba',
+  'Phison Elect `A`':'Phison Elect', 'Phison Elect `B`':'Phison Elect'
 };
 
 function parseWorkbook(wb){
@@ -136,7 +169,7 @@ function parseWorkbook(wb){
     const isin = r[ix.isin], parity = +r[ix.parity], cbPx = +r[ix.cbPx];
     if(!isin || !isFinite(parity) || !isFinite(cbPx) || cbPx<=0) continue;
     rows.push({
-      issue:String(r[ix.issue]??''), isin:String(isin),
+      issue:String(r[ix.issue]??''), issuer:(n=>ISSUER_ALIAS[n]??n)(String(r[ix.issue]??'').trim()), isin:String(isin),
       ccy: ix.ccy>=0? String(r[ix.ccy]??''):'', region: ix.region>=0? String(r[ix.region]??''):'',
       sector: ix.sector>=0? String(r[ix.sector]??''):'',
       delta: ix.delta>=0? +r[ix.delta] : NaN,
@@ -166,6 +199,25 @@ function compute(rows){
   const maxChk = Math.max(...rows.map(r=>isFinite(r.check)?Math.abs(r.check):0));
   return { n:rows.length, totCB, totPar, wSum,
     aggPrem:(totCB/totPar-1)*100, premCbw, premParw, deltaCbw, maxChk };
+}
+
+function computeIssuers(rows){
+  const m = new Map();
+  for(const r of rows){
+    const k = r.issuer.toUpperCase();
+    if(!m.has(k)) m.set(k,{issuer:r.issuer,regions:new Set(),sectors:new Set(),n:0,mcap:0,mcapPar:0,w:0,wPar:0,
+      premW:0,premWs:0,deltaW:0,deltaWs:0});
+    const a = m.get(k);
+    a.n++; a.mcap+=r.mcap; a.mcapPar+=r.mcapPar; a.w+=r.w; a.wPar+=r.wPar;
+    if(r.region) a.regions.add(r.region); if(r.sector) a.sectors.add(r.sector);
+    if(isFinite(r.prem)){a.premW+=r.prem*r.w; a.premWs+=r.w;}
+    if(isFinite(r.delta)){a.deltaW+=r.delta*r.w; a.deltaWs+=r.w;}
+  }
+  return [...m.values()].map(a=>({issuer:a.issuer, n:a.n,
+    region:[...a.regions].join(' / '), sector:[...a.sectors].join(' / '),
+    mcap:a.mcap, mcapPar:a.mcapPar, w:a.w, wPar:a.wPar, gap:a.wPar-a.w,
+    premAgg:(a.mcap/a.mcapPar-1)*100,
+    prem:a.premWs? a.premW/a.premWs : NaN, delta:a.deltaWs? a.deltaW/a.deltaWs : NaN}));
 }
 
 const BKT = [['Busted <40',0,40],['Balanced 40–60',40,60],['Balanced 60–80',60,80],['ITM >80',80,101]];
@@ -232,7 +284,7 @@ const DET = [
 ];
 function renderDetail(){
   const q = $('filter').value.trim().toLowerCase();
-  let rows = q? D.filter(r=>[r.issue,r.isin,r.region,r.sector,r.ccy].some(s=>s.toLowerCase().includes(q))) : [...D];
+  let rows = q? D.filter(r=>[r.issue,r.issuer,r.isin,r.region,r.sector,r.ccy].some(s=>s.toLowerCase().includes(q))) : [...D];
   rows.sort((a,b)=>{
     const x=a[sortKey],y=b[sortKey];
     const c = (typeof x==='string')? x.localeCompare(y) : (x-y);
@@ -252,12 +304,49 @@ function renderDetail(){
     const k=th.dataset.k; if(k===sortKey) sortAsc=!sortAsc; else {sortKey=k;sortAsc=true;} renderDetail();
   });
 }
+const IDET = [
+  ['issuer','Émetteur',0],['region','Région',0],['sector','Secteur',0],['n','N',1],
+  ['delta','Delta pond.',1],['prem','Prime pond. %',1],['premAgg','Prime agr. %',1],
+  ['mcap','MCap CB',1],['w','W CB %',1],['mcapPar','MCap Par.',1],['wPar','W Par %',1],['gap','Gap pp',1]
+];
+function renderIssuers(){
+  const q = $('iFilter').value.trim().toLowerCase();
+  let rows = q? I.filter(a=>[a.issuer,a.region,a.sector].some(s=>s.toLowerCase().includes(q))) : [...I];
+  rows.sort((a,b)=>{
+    const x=a[iSortKey],y=b[iSortKey];
+    const c = (typeof x==='string')? x.localeCompare(y) : ((isFinite(x)?x:-Infinity)-(isFinite(y)?y:-Infinity));
+    return iSortAsc? c : -c;
+  });
+  const head = IDET.map(([k,l,num])=>
+    `<th class="${num?'r':''}" data-k="${k}">${l}${k===iSortKey?`<span class="arr">${iSortAsc?'▲':'▼'}</span>`:''}</th>`).join('');
+  const body = rows.map(a=>`<tr data-issuer="${a.issuer.replace(/"/g,'&quot;')}">`+IDET.map(([k,,num])=>{
+    if(k==='gap') return `<td class="r">${gapHtml(a[k])}</td>`;
+    if(k==='n') return `<td class="r">${a[k]}</td>`;
+    if(k==='mcap'||k==='mcapPar') return `<td class="r">${fmt(a[k],0)}</td>`;
+    if(k==='delta') return `<td class="r">${fmt(a[k],1)}</td>`;
+    if(num) return `<td class="r">${fmt(a[k])}</td>`;
+    return `<td>${a[k]}</td>`;
+  }).join('')+'</tr>').join('');
+  $('issuerWrap').innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  $('iFilterCount').textContent = q? `${rows.length}/${I.length} émetteurs` : `${I.length} émetteurs · ${D.length} lignes`;
+  document.querySelectorAll('#issuerWrap th').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; if(k===iSortKey) iSortAsc=!iSortAsc; else {iSortKey=k;iSortAsc=typeof I[0]?.[k]==='string';} renderIssuers();
+  });
+  document.querySelectorAll('#issuerWrap tbody tr').forEach(tr=>tr.onclick=()=>{
+    $('filter').value = tr.dataset.issuer; showTab('detail'); renderDetail();
+  });
+}
+function showTab(t){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  $('pane-detail').classList.toggle('hidden',t!=='detail');
+  $('pane-issuers').classList.toggle('hidden',t!=='issuers');
+}
 function renderAll(){
   $('app').classList.remove('hidden');
-  document.querySelector('h2:nth-of-type(3)');
   renderChecks(); renderKpis(); renderBuckets(); renderRegions(); renderGaps();
-  document.querySelectorAll('h2').forEach(h=>{ if(h.textContent.startsWith('Détail')) h.textContent=`Détail des ${D.length} lignes`; });
-  renderDetail();
+  $('tabDetail').textContent = `Détail · ${D.length} lignes`;
+  $('tabIssuers').textContent = `Émetteurs · ${I.length}`;
+  renderDetail(); renderIssuers();
 }
 
 /* ---------- exports ---------- */
@@ -266,7 +355,7 @@ function exportXlsx(){
   const n = D.length, first=2, last=n+1, tr=last+1;
   const hdr = ['Issue','ISIN','Ccy','Region','Sector','Delta','CB Price','Equity Price',
     'Parity (FTSE)','Premium (FTSE) %','MCap CB (USDm)','Index Weight %',
-    'MCap Parity (USDm)','Parity Weight %','Weight Gap (pp)','Premium recalc %','Check (pp)'];
+    'MCap Parity (USDm)','Parity Weight %','Weight Gap (pp)','Premium recalc %','Check (pp)','Issuer'];
   const aoa = [hdr];
   const rows = [...D].sort((a,b)=>a.issue.localeCompare(b.issue));
   rows.forEach((r,i)=>{
@@ -276,7 +365,7 @@ function exportXlsx(){
       {t:'n',f:`M${R}/$M$${tr}*100`,v:r.wPar},
       {t:'n',f:`N${R}-L${R}`,v:r.gap},
       {t:'n',f:`(G${R}/I${R}-1)*100`,v:r.premCalc},
-      {t:'n',f:`P${R}-J${R}`,v:r.check}]);
+      {t:'n',f:`P${R}-J${R}`,v:r.check}, r.issuer]);
   });
   aoa.push(['TOTAL','','','','','','','','','',
     {t:'n',f:`SUM(K${first}:K${last})`,v:S.totCB},
@@ -284,7 +373,7 @@ function exportXlsx(){
     {t:'n',f:`SUM(M${first}:M${last})`,v:S.totPar},
     {t:'n',f:`SUM(N${first}:N${last})`,v:100},'','','']);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [26,15,6,13,13,7,9,11,9,10,11,9,11,9,9,10,8].map(w=>({wch:w}));
+  ws['!cols'] = [26,15,6,13,13,7,9,11,9,10,11,9,11,9,9,10,8,24].map(w=>({wch:w}));
   ws['!freeze'] = {xSplit:0,ySplit:1};
   XLSX.utils.book_append_sheet(wb, ws, 'Parity Detail');
 
@@ -319,6 +408,31 @@ function exportXlsx(){
   const ws2 = XLSX.utils.aoa_to_sheet(sm);
   ws2['!cols'] = [{wch:48},{wch:12},{wch:12},{wch:8},{wch:12},{wch:14},{wch:10},{wch:12}];
   XLSX.utils.book_append_sheet(wb, ws2, 'Summary');
+
+  // Issuers : agrégats par émetteur en SUMIFS sur la colonne R (Issuer) du détail
+  const rng = c => `${Dq}${c}${first}:${c}${last}`;
+  const ia = [['Issuer','Region','Sector','N','MCap CB (USDm)','MCap Parity (USDm)','Index Weight %','Parity Weight %',
+    'Weight Gap (pp)','Premium agg. %','Premium CB-wtd %','Delta CB-wtd']];
+  [...I].sort((a,b)=>b.w-a.w).forEach((a,i)=>{
+    const R=2+i, m=`(${rng('R')}=A${R})`;
+    ia.push([a.issuer,a.region,a.sector,
+      {t:'n',f:`COUNTIF(${rng('R')},A${R})`,v:a.n},
+      {t:'n',f:`SUMIFS(${rng('K')},${rng('R')},A${R})`,v:a.mcap},
+      {t:'n',f:`SUMIFS(${rng('M')},${rng('R')},A${R})`,v:a.mcapPar},
+      {t:'n',f:`SUMIFS(${rng('L')},${rng('R')},A${R})`,v:a.w},
+      {t:'n',f:`SUMIFS(${rng('N')},${rng('R')},A${R})`,v:a.wPar},
+      {t:'n',f:`H${R}-G${R}`,v:a.gap},
+      {t:'n',f:`(E${R}/F${R}-1)*100`,v:a.premAgg},
+      {t:'n',f:`SUMPRODUCT(${m}*${rng('J')}*${rng('L')})/G${R}`,v:a.prem},
+      {t:'n',f:`SUMPRODUCT(${m}*${rng('F')}*${rng('L')})/G${R}`,v:a.delta}]);
+  });
+  const ilast = ia.length;
+  ia.push(['TOTAL','','',
+    {t:'n',f:`SUM(D2:D${ilast})`,v:S.n},{t:'n',f:`SUM(E2:E${ilast})`,v:S.totCB},{t:'n',f:`SUM(F2:F${ilast})`,v:S.totPar},
+    {t:'n',f:`SUM(G2:G${ilast})`,v:S.wSum},{t:'n',f:`SUM(H2:H${ilast})`,v:100}]);
+  const ws3 = XLSX.utils.aoa_to_sheet(ia);
+  ws3['!cols'] = [26,13,18,5,13,14,12,13,12,12,13,11].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws3, 'Issuers');
   XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+'_parity_detail.xlsx');
 }
 function exportCsv(){
@@ -339,7 +453,7 @@ function handleFile(file){
   rd.onload = e=>{
     try{
       const wb = XLSX.read(new Uint8Array(e.target.result),{type:'array'});
-      D = parseWorkbook(wb); S = compute(D);
+      D = parseWorkbook(wb); S = compute(D); I = computeIssuers(D);
       $('drop').innerHTML = `<b>${srcName}</b> — ${S.n} lignes chargées · déposer un autre fichier pour recharger`;
       renderAll();
     }catch(err){
@@ -355,6 +469,8 @@ fi.onchange=e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); };
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
 drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
 $('filter').addEventListener('input',renderDetail);
+$('iFilter').addEventListener('input',renderIssuers);
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 $('btnXlsx').onclick=exportXlsx;
 $('btnCsv').onclick=exportCsv;
 </script>
