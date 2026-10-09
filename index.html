@@ -59,6 +59,14 @@ button.ghost:hover{border-color:var(--acc)}
 input[type=text]{background:var(--panel);border:1px solid var(--line);border-radius:6px;
 color:var(--txt);padding:7px 11px;font-size:12.5px;width:230px}
 input[type=text]:focus{outline:0;border-color:var(--acc)}
+select{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--txt);
+padding:7px 11px;font-size:12.5px;min-width:200px;cursor:pointer}
+select:focus{outline:0;border-color:var(--acc)}
+.univ{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
+.univ label{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+#regions tbody tr{cursor:pointer}
+#regions tbody tr.sel td{background:var(--panel2)}
+#regions tbody tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--acc)}
 .note{color:var(--dim);font-size:11.5px;margin-top:7px}
 #detailWrap{max-height:560px;overflow:auto;border-radius:8px;border:1px solid var(--line)}
 #detailWrap table{border:0;overflow:visible}
@@ -99,6 +107,7 @@ th,td{padding:6px 8px}
 .bar{gap:8px}
 .bar button{flex:1 1 100%;padding:11px 15px;font-size:13.5px}
 input[type=text]{width:100%;font-size:16px;padding:10px 12px}
+select{flex:1;font-size:16px;padding:9px 12px}
 /* onglets pleine largeur */
 .tabs{margin-top:20px}
 button.tab{flex:1;padding:11px 6px;font-size:11.5px}
@@ -123,6 +132,11 @@ max-width:150px;overflow:hidden;text-overflow:ellipsis;box-shadow:1px 0 0 var(--
 </div>
 
 <div id="app" class="hidden">
+<div class="univ">
+<label for="region">Univers</label>
+<select id="region"></select>
+<span class="note" id="univNote" style="margin:0"></span>
+</div>
 <div class="checks" id="checks"></div>
 <div class="kpis" id="kpis"></div>
 <div class="note" id="sanity"></div>
@@ -131,7 +145,7 @@ max-width:150px;overflow:hidden;text-overflow:ellipsis;box-shadow:1px 0 0 var(--
 <div id="buckets"></div>
 
 <div class="grid2" style="margin-top:16px">
-<div><h2 style="margin-top:0">Régions</h2><div id="regions"></div></div>
+<div><h2 style="margin-top:0">Régions · indice parité recalculé par région</h2><div id="regions"></div></div>
 <div><h2 style="margin-top:0">Écarts extrêmes Parity vs CB (pp)</h2><div id="gaps"></div></div>
 </div>
 
@@ -163,7 +177,10 @@ max-width:150px;overflow:hidden;text-overflow:ellipsis;box-shadow:1px 0 0 var(--
 
 <script>
 'use strict';
-let D = [];            // lignes calculées
+let ALL = [];          // lignes parsées (univers complet)
+let G = [];            // univers complet calculé (poids globaux)
+let region = '';       // '' = toutes régions
+let D = [];            // lignes calculées de l'univers courant
 let S = {};            // stats
 let srcName = '';
 let sortKey = 'issue', sortAsc = true;
@@ -259,6 +276,22 @@ function computeIssuers(rows){
     prem:a.premWs? a.premW/a.premWs : NaN, delta:a.deltaWs? a.deltaW/a.deltaWs : NaN}));
 }
 
+// univers courant : lignes clonées ; pour une région, poids CB renormalisés à 100 avant recalcul
+function subset(rows, renorm){
+  const sub = rows.map(r=>({...r}));
+  if(renorm){ const ws = sub.reduce((a,r)=>a+r.w,0); for(const r of sub) r.w = r.w/ws*100; }
+  return sub;
+}
+function setUniverse(reg){
+  region = reg;
+  $('region').value = reg;
+  D = reg? subset(ALL.filter(r=>r.region===reg), true) : subset(ALL);
+  S = compute(D); I = computeIssuers(D);
+  $('univNote').textContent = reg? `Indice ${reg} : ${D.length}/${ALL.length} lignes, poids CB renormalisés à 100 %` : '';
+  renderAll();
+}
+const uniTag = () => region? '_'+region.replace(/[^A-Za-z0-9]+/g,'_') : '';
+
 const BKT = [['Busted <40',0,40],['Balanced 40–60',40,60],['Balanced 60–80',60,80],['ITM >80',80,101]];
 const bucketOf = d => { for(const [n,lo,hi] of BKT) if(d>=lo&&d<hi) return n; return '–'; };
 
@@ -282,7 +315,7 @@ function renderKpis(){
   <div class="kpi"><div class="l">Prime pond. CB</div><div class="v">${fmt(S.premCbw)}%</div></div>
   <div class="kpi"><div class="l">Effet dispersion</div><div class="v amb">${S.premCbw-S.aggPrem>=0?'+':''}${fmt((S.premCbw-S.aggPrem)*100,0)}bp</div></div>
   <div class="kpi"><div class="l">Delta pond. CB</div><div class="v">${fmt(S.deltaCbw,1)}</div></div>`;
-  $('sanity').textContent = `Source : ${srcName} · ${S.n} lignes. L'écart prime pondérée CB (${fmt(S.premCbw)}%) vs agrégée (${fmt(S.aggPrem)}%) mesure la dispersion des primes du gisement.`;
+  $('sanity').textContent = `Source : ${srcName}${region?' · région '+region:''} · ${S.n} lignes. L'écart prime pondérée CB (${fmt(S.premCbw)}%) vs agrégée (${fmt(S.aggPrem)}%) mesure la dispersion des primes du gisement.`;
 }
 function agg(rows, keyFn){
   const m = new Map();
@@ -305,9 +338,23 @@ function renderBuckets(){
   $('buckets').innerHTML = h+'</tbody></table>';
 }
 function renderRegions(){
-  const m = [...agg(D, r=>r.region||'–').entries()].sort((a,b)=>b[1].w-a[1].w);
-  $('regions').innerHTML = '<table><thead><tr><th>Région</th><th class="r">N</th><th class="r">Poids CB %</th><th class="r">Poids parité %</th><th class="r">Gap</th></tr></thead><tbody>'+
-    m.map(([k,a])=>`<tr><td>${k}</td><td class="r">${a.n}</td><td class="r">${fmt(a.w)}</td><td class="r">${fmt(a.wPar)}</td><td class="r">${gapHtml(a.wPar-a.w)}</td></tr>`).join('')+'</tbody></table>';
+  // poids globaux (part de la région dans l'indice complet) + indice parité autonome par région
+  const m = new Map();
+  for(const r of G){
+    const k = r.region||'–';
+    if(!m.has(k)) m.set(k,{n:0,w:0,wPar:0,mcap:0,mcapPar:0,premW:0,premWs:0,deltaW:0,deltaWs:0});
+    const a = m.get(k); a.n++; a.w+=r.w; a.wPar+=r.wPar; a.mcap+=r.mcap; a.mcapPar+=r.mcapPar;
+    if(isFinite(r.prem)){a.premW+=r.prem*r.w; a.premWs+=r.w;}
+    if(isFinite(r.delta)){a.deltaW+=r.delta*r.w; a.deltaWs+=r.w;}
+  }
+  const rows = [...m.entries()].sort((a,b)=>b[1].w-a[1].w);
+  $('regions').innerHTML = '<table><thead><tr><th>Région</th><th class="r">N</th><th class="r">Poids CB %</th><th class="r">Poids parité %</th><th class="r">Gap</th><th class="r">Prime agr. %</th><th class="r">Prime pond. %</th><th class="r">Delta</th></tr></thead><tbody>'+
+    rows.map(([k,a])=>`<tr data-region="${k.replace(/"/g,'&quot;')}" class="${k===region?'sel':''}"><td>${k}</td><td class="r">${a.n}</td><td class="r">${fmt(a.w)}</td><td class="r">${fmt(a.wPar)}</td><td class="r">${gapHtml(a.wPar-a.w)}</td>`+
+      `<td class="r">${fmt((a.mcap/a.mcapPar-1)*100)}</td><td class="r">${fmt(a.premWs?a.premW/a.premWs:NaN)}</td><td class="r">${fmt(a.deltaWs?a.deltaW/a.deltaWs:NaN,1)}</td></tr>`).join('')+'</tbody></table>'+
+    '<div class="note">Poids et gap : part de la région dans l\'indice complet. Prime agrégée (MCap CB / MCap parité − 1), prime et delta pondérés CB : indice de la région pris isolément. Clic sur une ligne → recalcul de tout le tableau de bord sur la région (re-clic pour revenir à toutes).</div>';
+  document.querySelectorAll('#regions tbody tr').forEach(tr=>tr.onclick=()=>{
+    const k = tr.dataset.region; setUniverse(k===region? '' : k);
+  });
 }
 function renderGaps(){
   const s=[...D].sort((a,b)=>b.gap-a.gap);
@@ -428,7 +475,7 @@ function exportXlsx(){
   const Dq = "'Parity Detail'!";
   const sm = [
     ['FTSE Global Focus Parity — recalcul bottom-up'],
-    [`Source : ${srcName}, ${n} lignes. MCap Parity = MCap CB × Parité / Prix CB.`],
+    [`Source : ${srcName}${region?', région '+region+' (poids CB renormalisés à 100 %)':''}, ${n} lignes. MCap Parity = MCap CB × Parité / Prix CB.`],
     [],
     ['Nombre de lignes',{t:'n',f:`COUNTA(${Dq}A${first}:A${last})`,v:n}],
     ['MCap CB totale (USDm)',{t:'n',f:`${Dq}K${tr}`,v:S.totCB}],
@@ -481,7 +528,7 @@ function exportXlsx(){
   const ws3 = XLSX.utils.aoa_to_sheet(ia);
   ws3['!cols'] = [26,13,18,5,13,14,12,13,12,12,13,11].map(w=>({wch:w}));
   XLSX.utils.book_append_sheet(wb, ws3, 'Issuers');
-  XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+'_parity_detail.xlsx');
+  XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+uniTag()+'_parity_detail.xlsx');
 }
 // export xlsx (valeurs) du tableau affiché : mêmes colonnes, filtre et tri que l'écran
 function exportView(cols, rows, sheet, suffix){
@@ -493,7 +540,7 @@ function exportView(cols, rows, sheet, suffix){
   ws['!autofilter'] = {ref: XLSX.utils.encode_range({s:{r:0,c:0},e:{r:rows.length,c:cols.length-1}})};
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheet);
-  XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+suffix+'.xlsx');
+  XLSX.writeFile(wb, srcName.replace(/\.[^.]+$/,'')+uniTag()+suffix+'.xlsx');
 }
 function exportCsv(){
   const hdr=['Issue','ISIN','Ccy','Region','Sector','Delta','CB Price','Parity','Premium FTSE','MCap CB USDm','Index Weight','MCap Parity USDm','Parity Weight','Weight Gap','Premium recalc','Check'];
@@ -503,7 +550,7 @@ function exportCsv(){
       r.mcapPar.toFixed(4),r.wPar.toFixed(5),r.gap.toFixed(5),r.premCalc.toFixed(3),(isFinite(r.check)?r.check.toFixed(3):'')].join(','));
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));
-  a.download=srcName.replace(/\.[^.]+$/,'')+'_parity_detail.csv'; a.click();
+  a.download=srcName.replace(/\.[^.]+$/,'')+uniTag()+'_parity_detail.csv'; a.click();
 }
 
 /* ---------- fichier ---------- */
@@ -513,9 +560,13 @@ function handleFile(file){
   rd.onload = e=>{
     try{
       const wb = XLSX.read(new Uint8Array(e.target.result),{type:'array'});
-      D = parseWorkbook(wb); S = compute(D); I = computeIssuers(D);
+      ALL = parseWorkbook(wb);
+      G = subset(ALL); compute(G);   // poids globaux pour le tableau Régions
+      const regs = [...new Set(ALL.map(r=>r.region).filter(Boolean))].sort();
+      $('region').innerHTML = '<option value="">Toutes régions (indice complet)</option>'+
+        regs.map(g=>`<option value="${g.replace(/"/g,'&quot;')}">${g}</option>`).join('');
+      setUniverse('');
       $('drop').innerHTML = `<b>${srcName}</b> — ${S.n} lignes chargées · déposer un autre fichier pour recharger`;
-      renderAll();
     }catch(err){
       $('drop').innerHTML = `<b style="color:var(--red)">Erreur :</b> ${err.message}<div class="hint">Vérifier que le fichier est un export UCBINDEX (feuille "Index", en-tête avec ISIN et Parity).</div>`;
     }
@@ -529,6 +580,7 @@ fi.onchange=e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); };
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
 drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
 $('filter').addEventListener('input',renderDetail);
+$('region').onchange=e=>setUniverse(e.target.value);
 $('iFilter').addEventListener('input',renderIssuers);
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 $('btnXlsx').onclick=exportXlsx;
